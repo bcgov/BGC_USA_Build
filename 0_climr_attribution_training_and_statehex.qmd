@@ -1,0 +1,87 @@
+---
+title: "Climr attribution of training data and state hexgrid"
+format: html
+editor: visual
+author: "William H MacKenzie & Kiri Daust"
+date: "20/04/2024"
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+require(data.table)
+library(ggplot2)
+require(sf)
+require(climr)
+require(terra)
+require(tictoc)
+require(recipeselectors)
+require(tidymodels)
+require(Spbsampling)
+require(tidyverse)
+source("../Build_USA_BEC/_functions/AddVars.R")
+source("../Build_USA_BEC/_functions/removeOutlier.R")
+source("../Build_USA_BEC/_functions/acc_metrix.R")
+# cloud_dir <- "F:/OneDrive - Government of BC/CCISSv12/latest_CCISS_tool_files/"
+```
+
+## Attribute training data with climate data
+
+Import training point data and add climr variable to training set in preparation for BGC model build. Save for recovery in the model building scripts.
+
+```{r read in training point table and attribute}
+training.plots <- fread("./inputs/training_pts/US_TrainingPoints_15April2024.csv",  stringsAsFactors = FALSE,data.table = FALSE)  %>% 
+  dplyr::rename(lon = LON, lat = LAT, elev = ELEV_m) %>%
+  dplyr::filter(!is.na(lat)) %>%
+  dplyr::filter(!BGC == "NA") %>%
+  rowid_to_column("id") %>%
+  dplyr::select(lon,lat,elev, id, BGC) 
+setcolorder(training.plots, c("lon","lat","elev", "id", "BGC")) 
+clim_vars <- climr_downscale(training.plots, which_normal = "auto", vars = climr::list_variables(), return_normal = TRUE, cache = TRUE)
+
+setDT(clim_vars)
+clim_vars[,PERIOD := NULL]
+clim_vars <- left_join(training.plots, clim_vars)# %>% dplyr::select(-contains(remove))
+saveRDS(clim_vars, "./inputs/training_pts/USA_training_data_15Apr2024.rds")
+```
+
+```{r map of training points}
+#| fig-cap: "Distribution of USA BGC training points"
+#| out-width: "90%"
+##| fig-asp: 0.618
+pnts_sf <- st_as_sf(training.plots, coords=c("lon", "lat"), crs = 4326)
+
+mapview::mapView(pnts_sf,   cex = 6, legend = F, 
+                 label = pnts_sf$id, 
+                 map.types = "OpenTopoMap")
+```
+
+## Attribute state hexgrid of points with climate data
+
+A 400m hexgrid with ID points was created for each state in WNA using XX script. Each point for each State is attributed with climate data in this script. The resultant datasets are used int the predict scripts.
+
+Takes approximately 1:30 hr to run all 9 states
+
+```{r attribute state hexgrid}
+dl_state_climate <- function(region){
+coords <- fread(paste0("./inputs/grids/", region, "_400m_HexPts.csv"), stringsAsFactors = FALSE,  data.table = FALSE) %>% dplyr::rename(lon = Longitude, lat = Latitude, elev = Elevation, id = ID1) %>% dplyr::select(lon,lat,elev, id) %>% dplyr::filter(!is.na(lat)) %>% distinct(id, .keep_all = TRUE) %>% as.data.frame
+setcolorder(coords, c("lon","lat","elev", "id"))
+clim_vars <- climr_downscale(coords, which_normal = "auto", vars = climr::list_variables(), return_normal = TRUE, cache = TRUE)
+setDT(clim_vars)
+clim_vars[,PERIOD := NULL]
+clim_vars <- left_join(coords, clim_vars)# %>% dplyr::select(ID, everything())
+##saveRDS(clim_vars, paste0("./inputs/grids/", region, "_400m_HexPts_Normal_1961_1990MSY.rds"))
+###------instead of RDS because of fread and fwrite saving/reading csv is much faster
+fwrite(clim_vars, paste0("./inputs/grids/", region, "_400m_HexPts_Normal_1961_1990MSY.csv"))
+}
+tic()
+dl_state_climate("WA")
+dl_state_climate("OR")
+dl_state_climate("CA")
+dl_state_climate("ID")
+dl_state_climate("MT")
+dl_state_climate("WY")
+dl_state_climate("CO")
+dl_state_climate("UT")
+dl_state_climate("NV")
+toc()
+```
